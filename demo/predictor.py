@@ -12,6 +12,8 @@ from detectron2.data import MetadataCatalog
 from detectron2.engine.defaults import DefaultPredictor
 from detectron2.utils.video_visualizer import VideoVisualizer
 from detectron2.utils.visualizer import ColorMode, Visualizer
+from detectron2.structures.instances import Instances
+from detectron2.structures.boxes import Boxes
 
 
 class VisualizationDemo(object):
@@ -36,7 +38,7 @@ class VisualizationDemo(object):
         else:
             self.predictor = DefaultPredictor(cfg)
 
-    def run_on_image(self, image):
+    def run_on_image(self, image, class_filter=None, not_empty_threshold=5):
         """
         Args:
             image (np.ndarray): an image of shape (H, W, C) (in BGR order).
@@ -61,8 +63,39 @@ class VisualizationDemo(object):
                     predictions["sem_seg"].argmax(dim=0).to(self.cpu_device)
                 )
             if "instances" in predictions:
-                instances = predictions["instances"].to(self.cpu_device)
-                vis_output = visualizer.draw_instance_predictions(predictions=instances)
+                instances = predictions["instances"]
+
+                if not_empty_threshold:
+                    boxes: Boxes = instances.get("pred_boxes").to(self.cpu_device)
+
+                    idxs = [
+                        i
+                        for i, keep in enumerate(
+                            boxes.nonempty(threshold=not_empty_threshold)
+                        )
+                        if keep
+                    ]
+
+                    instances = Instances.cat([instances[i] for i in idxs])
+
+                if class_filter is not None:
+                    classes = instances.get("pred_classes").to(self.cpu_device)
+                    scores = instances.get("scores").to(self.cpu_device)
+
+                    idxs = [
+                        i
+                        for i, c in enumerate(classes)
+                        if c.item() in class_filter.keys()
+                        and scores[i] > class_filter[c.item()]
+                    ]
+
+                    instances = Instances.cat([instances[i] for i in idxs])
+
+                predictions["instances"] = instances
+
+                vis_output = visualizer.draw_instance_predictions(
+                    predictions=instances.to(self.cpu_device)
+                )
 
         return predictions, vis_output
 
@@ -94,7 +127,9 @@ class VisualizationDemo(object):
                 )
             elif "instances" in predictions:
                 predictions = predictions["instances"].to(self.cpu_device)
-                vis_frame = video_visualizer.draw_instance_predictions(frame, predictions)
+                vis_frame = video_visualizer.draw_instance_predictions(
+                    frame, predictions
+                )
             elif "sem_seg" in predictions:
                 vis_frame = video_visualizer.draw_sem_seg(
                     frame, predictions["sem_seg"].argmax(dim=0).to(self.cpu_device)
