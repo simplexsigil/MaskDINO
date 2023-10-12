@@ -76,6 +76,9 @@ class VisualizationDemo(object):
                         if keep
                     ]
 
+                    if len(idxs) == 0:
+                        return None, None
+
                     instances = Instances.cat([instances[i] for i in idxs])
 
                 if class_filter is not None:
@@ -88,6 +91,9 @@ class VisualizationDemo(object):
                         if c.item() in class_filter.keys()
                         and scores[i] > class_filter[c.item()]
                     ]
+
+                    if len(idxs) == 0:
+                        return None, None
 
                     instances = Instances.cat([instances[i] for i in idxs])
 
