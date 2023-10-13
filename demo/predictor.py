@@ -80,6 +80,9 @@ class VisualizationDemo(object):
                         if keep
                     ]
 
+                    if len(idxs) == 0:
+                        return None, None
+
                     instances = Instances.cat([instances[i] for i in idxs])
 
                 if class_filter is not None:
@@ -93,11 +96,10 @@ class VisualizationDemo(object):
                         and scores[i] > class_filter[c.item()]
                     ]
 
-                    all_inst = [instances[i] for i in idxs]
-                    if len(all_inst) > 0:
-                        instances = Instances.cat(all_inst)
-                    else:
+                    if len(idxs) == 0:
                         return None, None
+
+                    instances = Instances.cat([instances[i] for i in idxs])
 
                 predictions["instances"] = instances
 
