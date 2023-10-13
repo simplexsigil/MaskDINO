@@ -49,6 +49,10 @@ class VisualizationDemo(object):
         """
         vis_output = None
         predictions = self.predictor(image)
+
+        if len(predictions["instances"]) == 0:
+            return None, None
+
         # Convert image from OpenCV BGR format to Matplotlib RGB format.
         image = image[:, :, ::-1]
         visualizer = Visualizer(image, self.metadata, instance_mode=self.instance_mode)
@@ -89,13 +93,18 @@ class VisualizationDemo(object):
                         and scores[i] > class_filter[c.item()]
                     ]
 
-                    instances = Instances.cat([instances[i] for i in idxs])
+                    all_inst = [instances[i] for i in idxs]
+                    if len(all_inst) > 0:
+                        instances = Instances.cat(all_inst)
+                    else:
+                        return None, None
 
                 predictions["instances"] = instances
 
-                vis_output = visualizer.draw_instance_predictions(
-                    predictions=instances.to(self.cpu_device)
-                )
+                if instances is not None:
+                    vis_output = visualizer.draw_instance_predictions(
+                        predictions=instances.to(self.cpu_device)
+                    )
 
         return predictions, vis_output
 
