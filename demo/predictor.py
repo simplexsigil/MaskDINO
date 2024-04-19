@@ -60,10 +60,17 @@ class VisualizationDemo(object):
             vis_output (VisImage): the visualized image output.
         """
         vis_output = None
+<<<<<<< HEAD
         with torch.no_grad():
             predictions = self.predictor(image)
 
         predictions = move_tensors_to_cpu(predictions)
+=======
+        predictions = self.predictor(image)
+
+        if len(predictions["instances"]) == 0:
+            return None, None
+>>>>>>> 7e19b1032074485f56c99ac81e4155d4bf0c5011
 
         # Convert image from OpenCV BGR format to Matplotlib RGB format.
         image = image[:, :, ::-1]
@@ -82,7 +89,14 @@ class VisualizationDemo(object):
 
                     idxs = [i for i, keep in enumerate(boxes.nonempty(threshold=not_empty_threshold)) if keep]
 
+<<<<<<< HEAD
                     instances = Instances.cat([instances[i] for i in idxs]) if len(instances) > 0 else []
+=======
+                    if len(idxs) == 0:
+                        return None, None
+
+                    instances = Instances.cat([instances[i] for i in idxs])
+>>>>>>> 7e19b1032074485f56c99ac81e4155d4bf0c5011
 
                 if class_filter is not None:
                     classes = instances.get("pred_classes").to(self.cpu_device)
@@ -94,11 +108,25 @@ class VisualizationDemo(object):
                         if c.item() in class_filter.keys() and scores[i] > class_filter[c.item()]
                     ]
 
+<<<<<<< HEAD
                     instances = Instances.cat([instances[i] for i in idxs]) if len(instances) > 0 else []
 
                 predictions["instances"] = instances
 
                 vis_output = visualizer.draw_instance_predictions(predictions=instances.to(self.cpu_device))
+=======
+                    if len(idxs) == 0:
+                        return None, None
+
+                    instances = Instances.cat([instances[i] for i in idxs])
+
+                predictions["instances"] = instances
+
+                if instances is not None:
+                    vis_output = visualizer.draw_instance_predictions(
+                        predictions=instances.to(self.cpu_device)
+                    )
+>>>>>>> 7e19b1032074485f56c99ac81e4155d4bf0c5011
 
         return predictions, vis_output
 
