@@ -19,6 +19,20 @@ from detectron2.structures.instances import Instances
 from detectron2.structures.boxes import Boxes
 
 
+def move_tensors_to_cpu(obj):
+    """Recursively move all tensors in the object to CPU."""
+    if torch.is_tensor(obj):
+        return obj.cpu()
+    elif hasattr(obj, "__dict__"):
+        for k, v in vars(obj).items():
+            setattr(obj, k, move_tensors_to_cpu(v))
+    elif isinstance(obj, (list, tuple, set)):
+        return type(obj)(move_tensors_to_cpu(item) for item in obj)
+    elif isinstance(obj, dict):
+        return {k: move_tensors_to_cpu(v) for k, v in obj.items()}
+    return obj
+
+
 class VisualizationDemo(object):
     def __init__(self, cfg, instance_mode=ColorMode.IMAGE, parallel=False):
         """
@@ -28,9 +42,7 @@ class VisualizationDemo(object):
             parallel (bool): whether to run the model in different processes from visualization.
                 Useful since the visualization logic can be slow.
         """
-        self.metadata = MetadataCatalog.get(
-            cfg.DATASETS.TEST[0] if len(cfg.DATASETS.TEST) else "__unused"
-        )
+        self.metadata = MetadataCatalog.get(cfg.DATASETS.TEST[0] if len(cfg.DATASETS.TEST) else "__unused")
         self.cpu_device = torch.device("cpu")
         self.instance_mode = instance_mode
 
@@ -41,7 +53,7 @@ class VisualizationDemo(object):
         else:
             self.predictor = DefaultPredictor(cfg)
 
-    def run_on_image(self, image, class_filter=None, not_empty_threshold=5):
+    def run_on_image(self, image, class_filter=None, not_empty_threshold=10):
         """
         Args:
             image (np.ndarray): an image of shape (H, W, C) (in BGR order).
@@ -51,7 +63,10 @@ class VisualizationDemo(object):
             vis_output (VisImage): the visualized image output.
         """
         vis_output = None
-        predictions = self.predictor(image)
+        with torch.no_grad():
+            predictions = self.predictor(image)
+
+        predictions = move_tensors_to_cpu(predictions)
 
         if len(predictions["instances"]) == 0:
             return None, None
@@ -61,27 +76,17 @@ class VisualizationDemo(object):
         visualizer = Visualizer(image, self.metadata, instance_mode=self.instance_mode)
         if "panoptic_seg" in predictions:
             panoptic_seg, segments_info = predictions["panoptic_seg"]
-            vis_output = visualizer.draw_panoptic_seg_predictions(
-                panoptic_seg.to(self.cpu_device), segments_info
-            )
+            vis_output = visualizer.draw_panoptic_seg_predictions(panoptic_seg.to(self.cpu_device), segments_info)
         else:
             if "sem_seg" in predictions:
-                vis_output = visualizer.draw_sem_seg(
-                    predictions["sem_seg"].argmax(dim=0).to(self.cpu_device)
-                )
+                vis_output = visualizer.draw_sem_seg(predictions["sem_seg"].argmax(dim=0).to(self.cpu_device))
             if "instances" in predictions:
                 instances = predictions["instances"]
 
                 if not_empty_threshold:
                     boxes: Boxes = instances.get("pred_boxes").to(self.cpu_device)
 
-                    idxs = [
-                        i
-                        for i, keep in enumerate(
-                            boxes.nonempty(threshold=not_empty_threshold)
-                        )
-                        if keep
-                    ]
+                    idxs = [i for i, keep in enumerate(boxes.nonempty(threshold=not_empty_threshold)) if keep]
 
                     if len(idxs) == 0:
                         return None, None
@@ -95,8 +100,7 @@ class VisualizationDemo(object):
                     idxs = [
                         i
                         for i, c in enumerate(classes)
-                        if c.item() in class_filter.keys()
-                        and scores[i] > class_filter[c.item()]
+                        if c.item() in class_filter.keys() and scores[i] > class_filter[c.item()]
                     ]
 
                     if len(idxs) == 0:
@@ -107,9 +111,7 @@ class VisualizationDemo(object):
                 predictions["instances"] = instances
 
                 if instances is not None:
-                    vis_output = visualizer.draw_instance_predictions(
-                        predictions=instances.to(self.cpu_device)
-                    )
+                    vis_output = visualizer.draw_instance_predictions(predictions=instances.to(self.cpu_device))
 
         return predictions, vis_output
 
@@ -141,9 +143,7 @@ class VisualizationDemo(object):
                 )
             elif "instances" in predictions:
                 predictions = predictions["instances"].to(self.cpu_device)
-                vis_frame = video_visualizer.draw_instance_predictions(
-                    frame, predictions
-                )
+                vis_frame = video_visualizer.draw_instance_predictions(frame, predictions)
             elif "sem_seg" in predictions:
                 vis_frame = video_visualizer.draw_sem_seg(
                     frame, predictions["sem_seg"].argmax(dim=0).to(self.cpu_device)
@@ -319,9 +319,7 @@ class AsyncPredictor:
             cfg = cfg.clone()
             cfg.defrost()
             cfg.MODEL.DEVICE = "cuda:{}".format(gpuid) if num_gpus > 0 else "cpu"
-            self.procs.append(
-                AsyncPredictor._PredictWorker(cfg, self.task_queue, self.result_queue)
-            )
+            self.procs.append(AsyncPredictor._PredictWorker(cfg, self.task_queue, self.result_queue))
 
         self.put_idx = 0
         self.get_idx = 0
