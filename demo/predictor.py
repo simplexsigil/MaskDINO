@@ -9,6 +9,7 @@ from pycocotools.mask import encode
 import cv2
 import torch
 import numpy as np
+from tqdm import tqdm
 
 from detectron2.data import MetadataCatalog
 from detectron2.engine.defaults import DefaultPredictor
@@ -175,10 +176,71 @@ class VisualizationDemo(object):
             for frame in frame_gen:
                 yield process_predictions(frame, self.predictor(frame))
 
-    def run_on_video_rle(self, video, class_filter=None, not_empty_threshold=5):
-        video = cv2.VideoCapture(video)
+    def rle_encode(self, mask):
+        """Encodes a mask in RLE format."""
+        mask = np.asfortranarray(mask.astype(np.uint8))
 
-        frame_gen = self._frame_from_video(video)
+        return encode(mask)
+
+    def process_frame(
+        self,
+        frame,
+        predictions,
+        masks_info_dict,
+        not_empty_threshold=5,
+        class_filter=None,
+        device=None,
+        raw_mask_path=None,
+    ):
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rle_encoded_frame = []
+        raw_masks_frame = []
+
+        if "instances" in predictions:
+            instances: Instances = predictions["instances"]
+            boxes: Boxes = instances.get("pred_boxes").to("cpu")
+            classes = instances.get("pred_classes").to("cpu")
+            scores = instances.get("scores").to("cpu")
+
+            idxs = list(range(len(boxes)))
+
+            if not_empty_threshold:
+                idxs = [
+                    i for i in idxs if boxes[i].nonempty(threshold=not_empty_threshold)
+                ]
+
+            if class_filter is not None:
+                idxs = [
+                    i
+                    for i in idxs
+                    if classes[i].item() in class_filter
+                    and scores[i] > class_filter[classes[i].item()]
+                ]
+
+            instances = Instances.cat([instances[i] for i in idxs])
+            boxes: Boxes = instances.get("pred_boxes").to("cpu")
+            classes = instances.get("pred_classes").to("cpu")
+            scores = instances.get("scores").to("cpu")
+
+            masks = instances.get("pred_masks")
+
+            raw_masks_frame = masks.to("cpu").numpy()
+
+            for mask in raw_masks_frame:
+                rle_encoded_frame.append(self.rle_encode(mask))
+
+        else:
+            raise ValueError
+
+        masks_info_dict["rle_masks"].append(rle_encoded_frame)
+        masks_info_dict["classes"].append(classes.to("cpu").numpy())
+        masks_info_dict["boxes"].append(boxes.tensor.to("cpu").numpy())
+        masks_info_dict["scores"].append(scores.to("cpu").numpy())
+
+    def run_on_video_rle(
+        self, video, size=None, class_filter=None, not_empty_threshold=5
+    ):
+        print(f"Num Threads: {torch.get_num_threads()}")
         masks_info_dict = {
             "rle_masks": [],
             "raw_masks": [],
@@ -187,86 +249,30 @@ class VisualizationDemo(object):
             "scores": [],
         }
 
-        def rle_encode(mask):
-            """Encodes a mask in RLE format."""
-            mask = np.asfortranarray(mask.astype(np.uint8))
+        video_capture = cv2.VideoCapture(video)
+        num_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
 
-            return encode(mask)
+        with tqdm(total=num_frames, desc="  MaskDINO") as pbar:
+            for cnt in range(num_frames):
+                ret, frame = video_capture.read()
+                if not ret:
+                    break
 
-        def process_frame(frame, predictions, frame_id):
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            rle_encoded_frame = []
-            raw_masks_frame = []
+                if size is not None:
+                    frame = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
 
-            if "instances" in predictions:
-                instances = predictions["instances"]
-                boxes: Boxes = instances.get("pred_boxes").to(self.cpu_device)
-                classes = instances.get("pred_classes").to(self.cpu_device)
-                scores = instances.get("scores").to(self.cpu_device)
-
-                idxs = list(range(len(boxes)))
-
-                if not_empty_threshold:
-                    idxs = [
-                        i
-                        for i in idxs
-                        if boxes[i].nonempty(threshold=not_empty_threshold)
-                    ]
-
-                if class_filter is not None:
-                    idxs = [
-                        i
-                        for i in idxs
-                        if classes[i].item() in class_filter
-                        and scores[i] > class_filter[classes[i].item()]
-                    ]
-
-                instances = Instances.cat([instances[i] for i in idxs])
-                boxes: Boxes = instances.get("pred_boxes").to(self.cpu_device)
-                classes = instances.get("pred_classes").to(self.cpu_device)
-                scores = instances.get("scores").to(self.cpu_device)
-
-                masks = instances.get("pred_masks")
-
-                raw_masks_frame = masks.cpu().numpy()
-
-                for mask in raw_masks_frame:
-                    rle_encoded_frame.append(rle_encode(mask))
-
-            else:
-                raise ValueError
-
-            masks_info_dict["rle_masks"].append(rle_encoded_frame)
-            masks_info_dict["raw_masks"].append(raw_masks_frame)
-            masks_info_dict["classes"].append(classes.cpu().numpy())
-            masks_info_dict["boxes"].append(boxes.tensor.cpu().numpy())
-            masks_info_dict["scores"].append(scores.cpu().numpy())
-
-        if self.parallel:
-            buffer_size = self.predictor.default_buffer_size
-            frame_data = deque()
-            cnt = 0  # Initialize counter
-
-            for frame in frame_gen:
-                frame_data.append(frame)
-                self.predictor.put(frame)
-
-                if len(frame_data) > buffer_size:
-                    frame = frame_data.popleft()
-                    predictions = self.predictor.get()
-                    process_frame(frame, predictions, cnt)
-                    cnt += 1  # Increment counter after processing a frame
-
-            # Process remaining frames
-            while frame_data:
-                frame = frame_data.popleft()
-                predictions = self.predictor.get()
-                process_frame(frame, predictions, cnt)
-                cnt += 1
-        else:
-            for cnt, frame in enumerate(frame_gen):
                 predictions = self.predictor(frame)
-                process_frame(frame, predictions, cnt)
+                self.process_frame(
+                    frame,
+                    predictions,
+                    masks_info_dict,
+                    not_empty_threshold,
+                    class_filter,
+                )
+
+                pbar.update(1)
+
+        video_capture.release()
 
         return masks_info_dict
 
